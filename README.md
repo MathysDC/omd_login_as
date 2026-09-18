@@ -6,7 +6,7 @@ quel utilisateur interne, sans mot de passe et sans secret sur l'instance.
 ## Fonctionnement
 
 - Le tableau de bord détient une clé privée Ed25519 ; ce module n'embarque que la clé publique
-  (`omd_login_as/cles.py`).
+  (`cles.py`).
 - `POST /omd/login_as` reçoit un ticket signé (`typ=login`) valable 60 s, lié à l'hôte appelé et à
   la base, à usage unique (table `login.as.ticket`). Il ouvre la session puis redirige vers `/web`.
 - `GET /omd/login_as/users` rend les utilisateurs internes actifs sous jeton signé (`typ=users`).
@@ -15,7 +15,11 @@ quel utilisateur interne, sans mot de passe et sans secret sur l'instance.
 Le ticket voyage dans le corps d'un POST : il n'apparaît ni dans les journaux d'accès ni dans
 l'historique du navigateur.
 
-## Branches
+## Disposition et branches
+
+Le `__manifest__.py` est à la **racine du dépôt** : la plateforme Omydoo clone le dépôt tel quel
+dans `/mnt/extra-addons/omd_login_as`, le dépôt *est* le module.
+
 
 Une branche par série Odoo : `17.0`, `18.0`, `19.0`. Le code est identique, seule la `version`
 du manifeste change.
