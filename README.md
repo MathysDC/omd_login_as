@@ -1,0 +1,32 @@
+# omd_login_as
+
+Module Odoo qui permet au tableau de bord Omydoo d'ouvrir une session Odoo au nom de n'importe
+quel utilisateur interne, sans mot de passe et sans secret sur l'instance.
+
+## Fonctionnement
+
+- Le tableau de bord détient une clé privée Ed25519 ; ce module n'embarque que la clé publique
+  (`omd_login_as/cles.py`).
+- `POST /omd/login_as` reçoit un ticket signé (`typ=login`) valable 60 s, lié à l'hôte appelé et à
+  la base, à usage unique (table `login.as.ticket`). Il ouvre la session puis redirige vers `/web`.
+- `GET /omd/login_as/users` rend les utilisateurs internes actifs sous jeton signé (`typ=users`).
+- `GET /omd/login_as/health` rend version et identifiants de clés.
+
+Le ticket voyage dans le corps d'un POST : il n'apparaît ni dans les journaux d'accès ni dans
+l'historique du navigateur.
+
+## Branches
+
+Une branche par série Odoo : `17.0`, `18.0`, `19.0`. Le code est identique, seule la `version`
+du manifeste change.
+
+## Rotation de clé
+
+Ajouter la nouvelle clé publique dans `CLES_PUBLIQUES` sous un nouveau `kid`, publier, basculer le
+tableau de bord sur le nouveau `kid`, puis retirer l'ancienne clé.
+
+## Tests
+
+```
+odoo-bin -d <base> -i omd_login_as --test-tags omydoo --stop-after-init
+```
