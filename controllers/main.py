@@ -41,6 +41,19 @@ def _repondre(corps, *, type_contenu, statut):
     return reponse
 
 
+def _rediriger(url):
+    """Redirige vers `url` — construit à la main, et c'est nécessaire.
+
+    ⚠️ `request.redirect` **n'existe pas en Odoo 14** (ajouté plus tard) : l'appeler y levait un
+    `AttributeError` transformé en 500, après que le ticket avait déjà été consommé. On passe donc
+    par `make_response`, qui existe partout, et le cadre y pose le cookie de session comme pour
+    n'importe quelle réponse.
+    """
+    reponse = request.make_response("", headers=[("Location", url), ("Cache-Control", "no-store")])
+    reponse.status_code = 303
+    return reponse
+
+
 def _reponse_json(donnees, statut=200):
     """Rendre une réponse JSON non mise en cache."""
     return _repondre(
@@ -198,5 +211,7 @@ class LoginAs(http.Controller):
             return _page_refus("Lien de connexion déjà utilisé")
 
         _ouvrir_session(utilisateur)
-        _logger.info("omd_login_as: session ouverte pour %s (jti %s)", utilisateur.login, payload["jti"][:8])
-        return request.redirect("/web")
+        _logger.info(
+            "omd_login_as: session ouverte pour %s (jti %s)", utilisateur.login, payload["jti"][:8]
+        )
+        return _rediriger("/web")
