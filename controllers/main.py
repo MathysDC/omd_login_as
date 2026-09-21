@@ -25,12 +25,26 @@ _logger = logging.getLogger(__name__)
 VERSION_MODULE = "1.0.0"
 
 
+def _repondre(corps, *, type_contenu, statut):
+    """Construire une réponse au statut voulu, **sur toutes les versions d'Odoo**.
+
+    ⚠️ `request.make_response` n'accepte le paramètre `status` qu'à partir de la **16** ; en 14 et
+    15 sa signature est `(data, headers, cookies)` et le passer lève. On construit donc la réponse
+    sans lui, puis on pose `status_code` sur l'objet — un seul chemin, valable partout, plutôt que
+    deux branches à maintenir.
+    """
+    reponse = request.make_response(
+        corps,
+        headers=[("Content-Type", type_contenu), ("Cache-Control", "no-store")],
+    )
+    reponse.status_code = statut
+    return reponse
+
+
 def _reponse_json(donnees, statut=200):
     """Rendre une réponse JSON non mise en cache."""
-    return request.make_response(
-        json.dumps(donnees),
-        status=statut,
-        headers=[("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")],
+    return _repondre(
+        json.dumps(donnees), type_contenu="application/json; charset=utf-8", statut=statut
     )
 
 
@@ -49,9 +63,7 @@ def _page_refus(titre, statut=403):
         f"<div class='card'><h1>{titre}</h1>"
         "<p>Relancez la connexion depuis le tableau de bord Omydoo.</p></div></body></html>"
     )
-    return request.make_response(
-        page, status=statut, headers=[("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store")]
-    )
+    return _repondre(page, type_contenu="text/html; charset=utf-8", statut=statut)
 
 
 def _hote_appele():
