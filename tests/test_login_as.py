@@ -4,12 +4,10 @@ import secrets
 import time
 from urllib.parse import urlparse
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from odoo.tests import HttpCase, TransactionCase, tagged
 
-from odoo.tests import HttpCase, tagged
-
-from .. import cles
+from .. import cles, ed25519_pur
+from . import signature_de_test
 from ..jetons import PREFIXE, JetonRefuse, verifier
 
 
@@ -24,12 +22,13 @@ class TestLoginAs(HttpCase):
 
     @classmethod
     def setUpClass(cls):
-        """Générer une clé Ed25519 de test et la déclarer comme clé publique connue du module."""
+        """Générer une clé Ed25519 de test et la déclarer comme clé publique connue du module.
+
+        ⚠️ La signature passe par la bibliothèque quand elle est là, et par le signeur **de test**
+        sinon (image Odoo 14). Le module, lui, ne signe jamais : il ne sait que vérifier."""
         super().setUpClass()
-        cls.cle_privee = Ed25519PrivateKey.generate()
-        publique = cls.cle_privee.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw
-        )
+        cls.graine = secrets.token_bytes(32)
+        publique = signature_de_test.cle_publique(cls.graine)
         # Pas de `patch.dict` : le cadre de test d'Odoo 18 inspecte les patches et ne le connaît pas.
         cls.cles_avant = dict(cles.CLES_PUBLIQUES)
         cles.CLES_PUBLIQUES.clear()
@@ -55,7 +54,7 @@ class TestLoginAs(HttpCase):
             payload.update({"uid": self.admin.id, "login": self.admin.login})
         payload.update(surcharges)
         corps = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-        signature = self.cle_privee.sign(f"{PREFIXE}.{corps}".encode("ascii"))
+        signature = signature_de_test.signer(self.graine, f"{PREFIXE}.{corps}".encode("ascii"))
         return f"{PREFIXE}.{corps}.{_b64url(signature)}"
 
     def _connecter(self, ticket):
@@ -122,3 +121,98 @@ class TestLoginAs(HttpCase):
         self.assertEqual(refus.exception.raison, "duree")
         with self.assertRaises(JetonRefuse):
             verifier("pas.un.jeton", cles_publiques=cles.CLES_PUBLIQUES, typ="login", aud=self.hote, db=self.env.cr.dbname)
+
+
+@tagged("omydoo", "post_install", "-at_install")
+class TestEd25519Pur(TransactionCase):
+    """Le recours en Python pur — éprouvé contre la RFC **et** contre la bibliothèque auditée.
+
+    ⭐⭐ Ce double éprouvage est la condition qui rend acceptable d'avoir écrit cette vérification
+    nous-mêmes. Les vecteurs officiels prouvent la conformité ; le différentiel prouve qu'on rend
+    exactement le même verdict que `cryptography`, sur des cas valides **et** falsifiés.
+    """
+
+    # RFC 8032 §7.1 — (clé publique, message, signature), en hexadécimal.
+    VECTEURS = [
+        (
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+            "",
+            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc"
+            "61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+        ),
+        (
+            "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+            "72",
+            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e45"
+            "8f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+        ),
+        (
+            "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+            "af82",
+            "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae"
+            "67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+        ),
+    ]
+
+    def test_les_vecteurs_officiels_de_la_RFC_8032_passent(self):
+        """Conformité : les trois vecteurs §7.1, dont le message vide et un message d'un octet."""
+        for publique, message, signature in self.VECTEURS:
+            with self.subTest(message=message or "(vide)"):
+                self.assertTrue(
+                    ed25519_pur.verifier_signature(
+                        bytes.fromhex(publique), bytes.fromhex(message), bytes.fromhex(signature)
+                    )
+                )
+
+    def test_un_seul_bit_change_et_le_vecteur_est_REFUSE(self):
+        """⭐ Contrôle négatif des vecteurs : sans lui, une fonction qui rendrait toujours `True`
+        passerait le test précédent."""
+        publique, message, signature = self.VECTEURS[2]
+        octets = bytearray(bytes.fromhex(signature))
+        octets[0] ^= 0x01
+        self.assertFalse(
+            ed25519_pur.verifier_signature(
+                bytes.fromhex(publique), bytes.fromhex(message), bytes(octets)
+            )
+        )
+
+    def test_differentiel_contre_cryptography_valides_ET_falsifies(self):
+        """⭐⭐ Même verdict que la bibliothèque auditée, sur 60 signatures valides et 60 altérées.
+
+        ⚠️ Ignoré si `cryptography` est absente (c'est le cas sur l'image Odoo 14, celle qui
+        **utilise** ce recours) : le différentiel tourne alors sur les séries 15 à 19, où les deux
+        implémentations coexistent. C'est suffisant — le code éprouvé est le même partout.
+        """
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        except ImportError:
+            self.skipTest("cryptography absente : différentiel couvert par les autres séries")
+
+        for i in range(60):
+            privee = Ed25519PrivateKey.generate()
+            publique = privee.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            )
+            message = secrets.token_bytes(i % 40)
+            signature = privee.sign(message)
+            self.assertTrue(ed25519_pur.verifier_signature(publique, message, signature))
+            # Le même, un octet changé quelque part dans la signature : les deux doivent refuser.
+            altere = bytearray(signature)
+            altere[i % 64] ^= 0x80
+            self.assertFalse(ed25519_pur.verifier_signature(publique, message, bytes(altere)))
+
+    def test_les_entrees_absurdes_rendent_False_sans_jamais_lever(self):
+        """⛔ Longueurs fausses, point hors courbe, `S` non réduit : refus, jamais d'exception.
+
+        Le refus de `S >= L` est le moins évident des trois et le plus important : sans lui, une
+        signature reste valide sous une forme **malléable**."""
+        publique, message, signature = self.VECTEURS[1]
+        pub, msg, sig = bytes.fromhex(publique), bytes.fromhex(message), bytes.fromhex(signature)
+
+        self.assertFalse(ed25519_pur.verifier_signature(b"", msg, sig))
+        self.assertFalse(ed25519_pur.verifier_signature(pub, msg, b"court"))
+        self.assertFalse(ed25519_pur.verifier_signature(b"\xff" * 32, msg, sig))  # y hors corps
+        # `S` remplacé par une valeur supérieure à l'ordre du groupe.
+        non_reduit = sig[:32] + (b"\xff" * 32)
+        self.assertFalse(ed25519_pur.verifier_signature(pub, msg, non_reduit))

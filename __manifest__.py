@@ -7,7 +7,6 @@
     "license": "LGPL-3",
     "category": "Tools",
     "depends": ["base", "web"],
-    "external_dependencies": {"python": ["cryptography"]},
     "data": ["security/ir.model.access.csv"],
     "installable": True,
     "application": False,
