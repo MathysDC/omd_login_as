@@ -37,7 +37,12 @@ class TestLoginAs(HttpCase):
         # ⚠️ `HOST` et non `cls.base_url()` : cette méthode n'existe pas sur la classe en Odoo 14,
         # alors que `HOST` est exporté par le cadre de test de toutes les versions.
         cls.hote = HOST
-        cls.admin = cls.env.ref("base.user_admin")
+
+    def setUp(self):
+        """Résoudre l'administrateur ici et non en `setUpClass` : `cls.env` n'existe pas au niveau
+        classe en Odoo 14 (`HttpCase` y dérive de `TransactionCase`, dont l'env est d'instance)."""
+        super().setUp()
+        self.admin = self.env.ref("base.user_admin")
 
     @classmethod
     def _restaurer_cles(cls):
