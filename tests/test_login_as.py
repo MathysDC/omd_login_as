@@ -2,9 +2,9 @@ import base64
 import json
 import secrets
 import time
-from urllib.parse import urlparse
 
 from odoo.tests import HttpCase, TransactionCase, tagged
+from odoo.tests.common import HOST
 
 from .. import cles, ed25519_pur
 from . import signature_de_test
@@ -34,7 +34,9 @@ class TestLoginAs(HttpCase):
         cles.CLES_PUBLIQUES.clear()
         cles.CLES_PUBLIQUES["test"] = base64.b64encode(publique).decode("ascii")
         cls.addClassCleanup(cls._restaurer_cles)
-        cls.hote = urlparse(cls.base_url()).hostname
+        # ⚠️ `HOST` et non `cls.base_url()` : cette méthode n'existe pas sur la classe en Odoo 14,
+        # alors que `HOST` est exporté par le cadre de test de toutes les versions.
+        cls.hote = HOST
         cls.admin = cls.env.ref("base.user_admin")
 
     @classmethod
