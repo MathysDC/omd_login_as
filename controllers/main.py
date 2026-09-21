@@ -9,6 +9,7 @@ Le ticket voyage dans le corps d'un POST, jamais dans l'URL : il n'apparaît ni 
 d'accès ni dans l'historique du navigateur.
 """
 import html
+import inspect
 import json
 import logging
 from datetime import datetime, timezone
@@ -78,24 +79,41 @@ def _est_administrateur(utilisateur):
 def _ouvrir_session(utilisateur):
     """Authentifier la session courante pour cet utilisateur, sans mot de passe.
 
-    Reproduit la fin de ``Session.authenticate`` : pré-session (``pre_login``, ``pre_uid``) puis
-    ``finalize``, qui pose base, login, uid, contexte et jeton de session, et fait tourner
-    l'identifiant de session. Les clés sont posées par accès mapping : c'est la forme commune aux
-    versions 17 à 19. À défaut de ``finalize`` (versions plus anciennes), les attributs sont posés
-    directement.
+    ⭐⭐ **Deux contrats de session coexistent dans Odoo, et on les distingue par la SIGNATURE de
+    `Session.finalize`, jamais par un numéro de version** — c'est le fait observable, et il ne ment
+    pas quand une version intermédiaire bouge :
+
+    - **14 et 15** — `finalize(self)` : la pré-session ne porte que `pre_uid` ; `db` et `login` sont
+      posés **avant** par l'appelant (c'est ce que fait `authenticate`). `finalize` pose alors
+      `uid`, `session_token`, le contexte, et renseigne `request.uid` lui-même.
+    - **16 et suivantes** — `finalize(self, env)` : la pré-session porte `pre_login` **et**
+      `pre_uid`, tous deux consommés par `finalize`, qui pose aussi `db` et le contexte.
+
+    ⚠️ `request.update_env` n'existe **pas** avant la 16 : appelé inconditionnellement, il levait un
+    `AttributeError` sur 14 et 15 — d'où le `hasattr`. En 14/15, `finalize` a déjà fait le travail
+    équivalent en posant `request.uid`.
     """
     session = request.session
-    if hasattr(session, "finalize"):
-        session["pre_login"] = utilisateur.login
-        session["pre_uid"] = utilisateur.id
-        session.finalize(request.env)
-    else:
+    finalize = getattr(session, "finalize", None)
+    if finalize is None:
+        # Antérieur aux deux contrats : on pose ce que `finalize` aurait posé.
         session.uid = utilisateur.id
         session.login = utilisateur.login
         session.session_token = utilisateur._compute_session_token(session.sid)
         session.context = dict(request.env(user=utilisateur.id)["res.users"].context_get() or {})
-        session.is_dirty = True
-    request.update_env(user=utilisateur.id)
+    elif inspect.signature(finalize).parameters:
+        # Contrat 16+ : deux clés en pré-session, `finalize` prend l'environnement.
+        session["pre_login"] = utilisateur.login
+        session["pre_uid"] = utilisateur.id
+        finalize(request.env)
+    else:
+        # Contrat 14/15 : `db` et `login` d'abord, `pre_uid` ensuite, `finalize` sans argument.
+        session.db = request.env.cr.dbname
+        session.login = utilisateur.login
+        session.pre_uid = utilisateur.id
+        finalize()
+    if hasattr(request, "update_env"):
+        request.update_env(user=utilisateur.id)
 
 
 class LoginAs(http.Controller):
